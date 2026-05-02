@@ -64,6 +64,7 @@ def format_viewpoints(entries: list[dict]) -> str:
 base = read_file("instructions/base.md")
 planner_rules = read_file("instructions/planner.md")
 writer_rules = read_file("instructions/writer.md")
+reviewer_rules = read_file("instructions/reviewer.md")
 
 
 def planner_agent(state: State) -> State:
@@ -137,6 +138,57 @@ def writer_agent(state: State) -> State:
     return state
 
 
+def reviewer_agent(state: State) -> State:
+    """Reviewer：读 State.writer_output，对照 base.md 规则检查质量，写入 State.review_passed / State.review_notes"""
+    print("\n[Reviewer] 正在审核...\n")
+
+    # 干净上下文：不给 Reviewer 看 Planner 策划，只看文章成品 + 规则
+    system = f"{base}\n\n{reviewer_rules}"
+    user = f"""【待审核文章】
+{state.writer_output}
+
+【质量规则】
+{base}
+
+请逐条检查：
+1. 核心观点是否在前三段出现？
+2. 每段是否超过 150 字？
+3. 有没有空洞总结？
+4. 技术概念是否解释了？
+5. 视角是否与已用视角重复？
+   已用视角：
+   {state.get_viewpoints_text()}
+
+审核完成后，在最后输出：
+[REVIEW_RESULT]
+通过：是/否
+问题：（如不通过，列出具体问题）
+[/REVIEW_RESULT]
+"""
+
+    response = client.chat.completions.create(
+        model="deepseek-chat",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.2,  # 审核不需要创意，要一致性
+    )
+    state.review_notes = response.choices[0].message.content
+    print(state.review_notes)
+
+    # 解析审核结果
+    match = re.search(r"通过：(是|否)", state.review_notes)
+    state.review_passed = bool(match and match.group(1) == "是")
+
+    if state.review_passed:
+        print("\n[Reviewer] ✅ 审核通过")
+    else:
+        print("\n[Reviewer] ❌ 不通过，需要修改")
+
+    return state
+
+
 # ============ Pipeline ============
 # 1. 从文件加载初始 State
 state = State(
@@ -148,7 +200,19 @@ state = State(
 state = planner_agent(state)
 state = writer_agent(state)
 
-# 3. 持久化 State 到文件
+# 3. Reviewer 审核
+state = reviewer_agent(state)
+
+# 4. 不通过则退回重写（最多 2 次）
+retry = 0
+while not state.review_passed and retry < 2:
+    retry += 1
+    print(f"\n=== 退回重写（第 {retry} 次）===")
+    state = writer_agent(state)
+    state = reviewer_agent(state)
+
+# 5. 持久化 State 到文件
 save_file("state/viewpoints.md", format_viewpoints(state.viewpoints))
-print("\n=== 双Agent运行完成 ===")
+print("\n=== 运行完成 ===")
+print(f"[State] 审核结果: {'通过' if state.review_passed else '未通过（已达最大重试次数）'}")
 print(f"[State] 已持久化 {len(state.viewpoints)} 条视角记录到 state/viewpoints.md")
