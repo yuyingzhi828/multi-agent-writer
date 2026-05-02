@@ -17,6 +17,7 @@ class State:
     viewpoints: list[dict] = field(default_factory=list)   # 视角记录 [{timestamp, log}]
     planner_output: str = ""                    # Planner 策划结果
     writer_output: str = ""                     # Writer 文章结果
+    research_notes: str = ""                    # Researcher 素材结果
     review_passed: bool = False                 # Reviewer 审核是否通过
     review_notes: str = ""                      # Reviewer 审核意见
 

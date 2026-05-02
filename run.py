@@ -65,14 +65,76 @@ base = read_file("instructions/base.md")
 planner_rules = read_file("instructions/planner.md")
 writer_rules = read_file("instructions/writer.md")
 reviewer_rules = read_file("instructions/reviewer.md")
+researcher_rules = read_file("instructions/researcher.md")
 
 
-def planner_agent(state: State) -> State:
+# ============ 素材库搜索 ============
+MATERIALS_DIR = "materials"
+
+
+def search_materials(topic: str) -> str:
+    """在本地素材库中搜索与主题相关的 markdown 文件。
+    关键词匹配后返回文件摘要；素材库少时全量返回。"""
+    import glob
+    md_files = glob.glob(f"{MATERIALS_DIR}/**/*.md", recursive=True)
+    if not md_files:
+        return "（素材库为空，没有可用的本地素材）"
+
+    results = []
+    keywords = topic.lower().split()
+    for fpath in md_files:
+        content = read_file(fpath)
+        score = sum(1 for kw in keywords if kw in content.lower())
+        if score > 0 or len(md_files) <= 3:  # 文件少时全量返回
+            preview = content[:500] + ("..." if len(content) > 500 else "")
+            results.append(f"### {fpath}\n{preview}")
+
+    return "\n\n".join(results) if results else "（未找到与主题匹配的素材）"
+
+
+
+def researcher_agent(state: State) -> State:
+    """Researcher：搜索本地素材库，生成结构化素材笔记，写入 State.research_notes"""
+    print("\n[Researcher] 正在搜索素材...\n")
+
+    # 1. 本地素材库搜索
+    local_materials = search_materials(state.progress)
+
+    # 2. 让 LLM 整理素材
+    system = f"{base}\n\n{researcher_rules}"
+    user = f"""【当前主题】
+{state.progress}
+
+【本地素材库】
+{local_materials}
+
+请整理出一份素材笔记，每个素材标注：
+- 【来源】文件名
+- 【内容】关键摘录
+- 【用途】可用于文章什么位置（开头/论据/案例/结尾）
+
+如果素材不足，在笔记末尾标注"缺素材：XXX"。"""
+
+    response = client.chat.completions.create(
+        model="deepseek-chat",
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        temperature=0.3,
+    )
+    state.research_notes = response.choices[0].message.content
+    print(state.research_notes)
+    return state
     """Planner：读 State.progress，输出策划结果，写入 State.planner_output"""
     print("\n[Planner] 正在生成策划...\n")
 
     system = f"{base}\n\n{planner_rules}"
-    user = f"【当前任务】\n{state.progress}"
+    user = f"""【当前任务】
+{state.progress}
+
+【可用素材】
+{state.research_notes}"""
 
     response = client.chat.completions.create(
         model="deepseek-chat",
@@ -196,7 +258,10 @@ state = State(
     viewpoints=parse_viewpoints(read_file("state/viewpoints.md")),
 )
 
-# 2. Planner → Writer（State 显式传递）
+# 2. Researcher 搜索素材
+state = researcher_agent(state)
+
+# 3. Planner → Writer（State 显式传递）
 state = planner_agent(state)
 state = writer_agent(state)
 
