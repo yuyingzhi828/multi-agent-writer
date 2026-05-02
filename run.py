@@ -6,16 +6,11 @@ from state import State
 
 print("正在启动双Agent Harness...")
 
-# Planner 用 GPT-5（OpenAI），Writer 用 DeepSeek
-ds_key = os.getenv("DEEPSEEK_API_KEY")
-oai_key = os.getenv("OPENAI_API_KEY")
-if not ds_key:
+api_key = os.getenv("DEEPSEEK_API_KEY")
+if not api_key:
     raise ValueError("没有找到 DEEPSEEK_API_KEY,请先设置 API Key")
-if not oai_key:
-    raise ValueError("没有找到 OPENAI_API_KEY,请先设置 API Key")
 
-ds_client = OpenAI(api_key=ds_key, base_url="https://api.deepseek.com")
-oai_client = OpenAI(api_key=oai_key)
+client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
 
 
 # ============ 文件读写（仅 pipeline 首尾用）============
@@ -78,8 +73,8 @@ def planner_agent(state: State) -> State:
     system = f"{base}\n\n{planner_rules}"
     user = f"【当前任务】\n{state.progress}"
 
-    response = oai_client.chat.completions.create(
-        model="gpt-5",
+    response = client.chat.completions.create(
+        model="deepseek-chat",
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -117,7 +112,7 @@ def writer_agent(state: State) -> State:
 [/VIEWPOINT_LOG]
 """
 
-    response = ds_client.chat.completions.create(
+    response = client.chat.completions.create(
         model="deepseek-chat",
         messages=[
             {"role": "system", "content": system},
