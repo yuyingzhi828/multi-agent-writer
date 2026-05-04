@@ -127,6 +127,9 @@ def researcher_agent(state: State) -> State:
     state.research_notes = response.choices[0].message.content
     print(state.research_notes)
     return state
+
+
+def planner_agent(state: State) -> State:
     """Planner：读 State.progress，输出策划结果，写入 State.planner_output"""
     print("\n[Planner] 正在生成策划...\n")
 
