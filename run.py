@@ -1,11 +1,15 @@
 import os
 import re
+import sys
 from datetime import datetime
 from openai import OpenAI
 from state import State
 from context_budget import context_budget
 
 print("正在启动双Agent Harness...")
+
+# 命令行参数：python3 run.py "你的主题"
+topic = sys.argv[1] if len(sys.argv) > 1 else None
 
 api_key = os.getenv("DEEPSEEK_API_KEY")
 if not api_key:
@@ -258,7 +262,7 @@ def reviewer_agent(state: State) -> State:
 # ============ Pipeline ============
 # 1. 从文件加载初始 State
 state = State(
-    progress=read_file("instructions/state/progress.md"),
+    progress=topic or read_file("instructions/state/progress.md"),
     viewpoints=parse_viewpoints(read_file("state/viewpoints.md")),
 )
 
