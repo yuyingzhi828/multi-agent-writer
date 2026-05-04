@@ -70,7 +70,7 @@ researcher_rules = read_file("instructions/researcher.md")
 
 
 # ============ 素材库搜索 ============
-MATERIALS_DIR = "materials"
+MATERIALS_DIR = "/Users/yuyingzhi/Documents/Knowledge Repository"
 
 
 def search_materials(topic: str) -> str:
