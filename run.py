@@ -3,6 +3,7 @@ import re
 from datetime import datetime
 from openai import OpenAI
 from state import State
+from context_budget import context_budget
 
 print("正在启动双Agent Harness...")
 
@@ -260,6 +261,9 @@ state = State(
 
 # 2. Researcher 搜索素材
 state = researcher_agent(state)
+
+# 2.5. Context Budgeting：采集→排序→压缩→预算→拼装（Planner 只分 4000 token）
+state = context_budget(state, budget=4000)
 
 # 3. Planner → Writer（State 显式传递）
 state = planner_agent(state)
