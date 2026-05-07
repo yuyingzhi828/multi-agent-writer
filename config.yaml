@@ -1,0 +1,17 @@
+# multi-agent-writer 配置文件
+# 修改路径时使用绝对路径，或相对于项目根目录的相对路径
+# 支持 macOS / Windows / Linux
+
+# 素材库路径（Researcher 搜索素材的目录）
+# macOS 示例：/Users/yourname/Documents/Knowledge Repository
+# Windows 示例：C:/Users/yourname/Documents/Knowledge Repository
+# Linux 示例：/home/yourname/knowledge
+materials_dir: /Users/yuyingzhi/Documents/Knowledge Repository
+
+# 成品落盘路径（Pipeline 跑完后文章自动保存的目录）
+# 留空则使用项目根目录下的 outputs/
+outputs_dir: outputs
+
+# 模型配置
+model: deepseek-chat
+api_base: https://api.deepseek.com

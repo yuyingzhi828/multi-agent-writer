@@ -1,21 +1,47 @@
 import os
 import re
 import sys
+import glob
 from datetime import datetime
+from pathlib import Path
 from openai import OpenAI
+try:
+    import yaml
+except ImportError:
+    yaml = None
 from state import State
 from context_budget import context_budget
+from traceability import Traceability
+from recovery import recover, simple_retry, writer_recovery, reviewer_recovery
+from tool_schema import call_tool, extract_missing_keywords
 
-print("正在启动双Agent Harness...")
+print("正在启动 9-Agent Harness（含 Recovery 恢复层 + ToolSchema 搜索层）...")
+
+# ============ 加载 config.yaml ============
+def load_config() -> dict:
+    config_path = Path(__file__).parent / "config.yaml"
+    defaults = {
+        "materials_dir": str(Path(__file__).parent / "materials"),
+        "outputs_dir": "outputs",
+        "model": "deepseek-chat",
+        "api_base": "https://api.deepseek.com",
+    }
+    if yaml and config_path.exists():
+        with open(config_path, "r", encoding="utf-8") as f:
+            loaded = yaml.safe_load(f) or {}
+        defaults.update({k: v for k, v in loaded.items() if v is not None})
+    return defaults
+
+CONFIG = load_config()
 
 # 命令行参数：python3 run.py "你的主题"
 topic = sys.argv[1] if len(sys.argv) > 1 else None
 
-api_key = os.getenv("DEEPSEEK_API_KEY")
+api_key = os.getenv("DEEPSEEK_API_KEY") or "sk-73ffedde56be495fa07c60745adbb702"
 if not api_key:
     raise ValueError("没有找到 DEEPSEEK_API_KEY,请先设置 API Key")
 
-client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com")
+client = OpenAI(api_key=api_key, base_url=CONFIG["api_base"])
 
 
 # ============ 文件读写（仅 pipeline 首尾用）============
@@ -74,7 +100,7 @@ researcher_rules = read_file("instructions/researcher.md")
 
 
 # ============ 素材库搜索 ============
-MATERIALS_DIR = "/Users/yuyingzhi/Documents/Knowledge Repository"
+MATERIALS_DIR = CONFIG["materials_dir"]
 
 
 def search_materials(topic: str) -> str:
@@ -129,6 +155,40 @@ def researcher_agent(state: State) -> State:
         temperature=0.3,
     )
     state.research_notes = response.choices[0].message.content
+
+    # 3. 本地素材不足 → 按 Tool Schema 调用搜索（最多 max_calls 次）
+    search_calls = 0
+    max_search_calls = 3
+    while search_calls < max_search_calls:
+        keywords = extract_missing_keywords(state.research_notes)
+        if not keywords:
+            break
+        search_calls += 1
+        print(f"\n[Researcher] 本地素材不足，调用搜索（第{search_calls}次）：{keywords}")
+        search_result = call_tool(
+            "search_web",
+            {"query": keywords, "max_results": 5},
+            call_count=search_calls,
+        )
+        state.research_notes += search_result
+        # 再次让 LLM 基于扩充的素材重新整理
+        user2 = f"""【当前主题】
+{state.progress}
+
+【全部素材（含本地+网络搜索）】
+{state.research_notes}
+
+素材已扩充。请重新整理一份完整的素材笔记。如果仍然不足，标注"缺素材：XXX"。"""
+        response2 = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user2},
+            ],
+            temperature=0.3,
+        )
+        state.research_notes = response2.choices[0].message.content
+
     print(state.research_notes)
     return state
 
@@ -266,29 +326,58 @@ state = State(
     viewpoints=parse_viewpoints(read_file("state/viewpoints.md")),
 )
 
-# 2. Researcher 搜索素材
-state = researcher_agent(state)
+# 启用可追溯层
 
-# 2.5. Context Budgeting：采集→排序→压缩→预算→拼装（Planner 只分 4000 token）
-state = context_budget(state, budget=4000)
+tracer = Traceability()
+_traced = lambda agent, name: lambda s: tracer.wrap(agent, name, s)
 
-# 3. Planner → Writer（State 显式传递）
-state = planner_agent(state)
-state = writer_agent(state)
+# Recovery 包裹 Traceability 包裹 Agent
+# 前四个 Agent 用简单指数退避重试
+state = recover(simple_retry, _traced(researcher_agent, "Researcher"), "Researcher", state, base_delay=2)
+state = recover(simple_retry, _traced(context_budget, "ContextBudgeting"), "ContextBudgeting", state, base_delay=2)
+state = recover(simple_retry, _traced(planner_agent, "Planner"), "Planner", state, base_delay=2)
 
-# 3. Reviewer 审核
-state = reviewer_agent(state)
+# Writer 用专用恢复：重试→降级→回退→升人
+state = recover(writer_recovery, _traced(writer_agent, "Writer"), "Writer", state)
+
+# Reviewer 用专用恢复：连续驳回 3 次触发回退
+state = recover(reviewer_recovery, _traced(reviewer_agent, "Reviewer"), "Reviewer", state)
 
 # 4. 不通过则退回重写（最多 2 次）
 retry = 0
 while not state.review_passed and retry < 2:
     retry += 1
     print(f"\n=== 退回重写（第 {retry} 次）===")
-    state = writer_agent(state)
-    state = reviewer_agent(state)
+    state = recover(writer_recovery, _traced(writer_agent, "Writer"), "Writer", state)
+    state = recover(reviewer_recovery, _traced(reviewer_agent, "Reviewer"), "Reviewer", state)
 
 # 5. 持久化 State 到文件
 save_file("state/viewpoints.md", format_viewpoints(state.viewpoints))
+
+# 6. 成品落盘（版本号自动递增）
+def save_output_versioned(content: str, topic: str) -> str:
+    """成品落盘：outputs/{topic}_v1.md / v2.md ...，文章开头注入版本信息。"""
+    outputs_dir = Path(CONFIG["outputs_dir"])
+    outputs_dir.mkdir(parents=True, exist_ok=True)
+    # 清理 topic 用于文件名
+    safe_topic = re.sub(r'[^\w\u4e00-\u9fff\-]', '_', topic)[:30].strip('_')
+    # 找下一个版本号
+    existing = sorted(outputs_dir.glob(f"{safe_topic}_v*.md"))
+    next_v = len(existing) + 1
+    filename = f"{safe_topic}_v{next_v}.md"
+    filepath = outputs_dir / filename
+    # 文章开头注入版本信息
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    header = f"<!-- 版本 v{next_v} | 生成时间 {now} | 审核：{'通过' if state.review_passed else '未通过'} -->\n\n"
+    save_file(str(filepath), header + content)
+    return str(filepath)
+
+if state.writer_output:
+    output_path = save_output_versioned(state.writer_output, topic or "article")
+    print(f"[成品落盘] ✅ {output_path}")
+
+# 7. 输出追溯报告
+tracer.print_report()
 print("\n=== 运行完成 ===")
 print(f"[State] 审核结果: {'通过' if state.review_passed else '未通过（已达最大重试次数）'}")
 print(f"[State] 已持久化 {len(state.viewpoints)} 条视角记录到 state/viewpoints.md")
