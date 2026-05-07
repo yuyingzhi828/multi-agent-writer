@@ -1,0 +1,24 @@
+# multi-agent-writer 配置模板
+# 复制此文件为 config.yaml，填入真实值后使用
+# config.yaml 已加入 .gitignore，不会被提交到代码库
+
+# 素材库路径
+# macOS: /Users/yourname/Documents/Knowledge Repository
+# Windows: C:/Users/yourname/Documents/Knowledge Repository
+# Linux: /home/yourname/knowledge
+materials_dir: /path/to/your/knowledge/repository
+
+# 成品落盘路径（默认 outputs/）
+outputs_dir: outputs
+
+# 模型配置
+model: deepseek-chat
+api_base: https://api.deepseek.com
+
+# DeepSeek API Key
+# 获取地址：https://platform.deepseek.com
+deepseek_api_key: YOUR_DEEPSEEK_API_KEY
+
+# Tavily 搜索 API Key
+# 获取地址：https://tavily.com
+tavily_api_key: YOUR_TAVILY_API_KEY

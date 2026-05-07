@@ -37,9 +37,9 @@ CONFIG = load_config()
 # 命令行参数：python3 run.py "你的主题"
 topic = sys.argv[1] if len(sys.argv) > 1 else None
 
-api_key = os.getenv("DEEPSEEK_API_KEY") or "sk-73ffedde56be495fa07c60745adbb702"
+api_key = os.getenv("DEEPSEEK_API_KEY") or CONFIG.get("deepseek_api_key", "")
 if not api_key:
-    raise ValueError("没有找到 DEEPSEEK_API_KEY,请先设置 API Key")
+    raise ValueError("没有找到 DEEPSEEK_API_KEY，请在 config.yaml 或环境变量中设置")
 
 client = OpenAI(api_key=api_key, base_url=CONFIG["api_base"])
 
