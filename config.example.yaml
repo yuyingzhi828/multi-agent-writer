@@ -22,3 +22,18 @@ deepseek_api_key: YOUR_DEEPSEEK_API_KEY
 # Tavily 搜索 API Key
 # 获取地址：https://tavily.com
 tavily_api_key: YOUR_TAVILY_API_KEY
+
+# 参考文章 URL（用于风格提取 + 补充素材）
+# 支持公众号链接或任意网页，Researcher 会自动抓取正文
+# 留空则只用本地素材库
+reference_urls: []
+#  - "https://mp.weixin.qq.com/s/xxx"
+#  - "https://mp.weixin.qq.com/s/yyy"
+
+# 网络搜索开关（true=允许 Researcher 联网补充素材，false=只用本地）
+enable_web_search: true
+
+# 素材文件格式（默认只读 .md，可加 .txt）
+materials_formats:
+  - "*.md"
+  - "*.txt"

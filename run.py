@@ -103,24 +103,117 @@ researcher_rules = read_file("instructions/researcher.md")
 MATERIALS_DIR = CONFIG["materials_dir"]
 
 
-def search_materials(topic: str) -> str:
-    """在本地素材库中搜索与主题相关的 markdown 文件。
-    关键词匹配后返回文件摘要；素材库少时全量返回。"""
-    import glob
-    md_files = glob.glob(f"{MATERIALS_DIR}/**/*.md", recursive=True)
-    if not md_files:
-        return "（素材库为空，没有可用的本地素材）"
+def fetch_url_text(url: str, timeout: int = 10) -> str:
+    """抓取 URL 页面正文，返回纯文本。失败时返回空字符串。"""
+    try:
+        import urllib.request
+        import html
+        import re as _re
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+        # 去掉 script/style 标签
+        raw = _re.sub(r'<script[^>]*>.*?</script>', '', raw, flags=_re.DOTALL | _re.IGNORECASE)
+        raw = _re.sub(r'<style[^>]*>.*?</style>', '', raw, flags=_re.DOTALL | _re.IGNORECASE)
+        # 去掉所有 HTML 标签
+        text = _re.sub(r'<[^>]+>', ' ', raw)
+        text = html.unescape(text)
+        # 合并多余空白
+        text = _re.sub(r'\s+', ' ', text).strip()
+        return text[:3000]  # 最多取前 3000 字
+    except Exception as e:
+        print(f"[fetch_url] 抓取失败 {url}: {e}")
+        return ""
 
+
+def search_materials(topic: str) -> str:
+    """在本地素材库中搜索相关内容，同时抓取 config 里的 reference_urls。
+    支持 .md / .txt 格式，由 config.materials_formats 控制。"""
+    import glob
     results = []
     keywords = topic.lower().split()
-    for fpath in md_files:
+
+    # 1. 本地素材库（支持多格式）
+    formats = CONFIG.get("materials_formats", ["*.md"])
+    all_files = []
+    for fmt in formats:
+        all_files.extend(glob.glob(f"{MATERIALS_DIR}/{fmt}", recursive=False))
+        all_files.extend(glob.glob(f"{MATERIALS_DIR}/**/{fmt}", recursive=True))
+    all_files = list(set(all_files))  # 去重
+
+    for fpath in all_files:
         content = read_file(fpath)
         score = sum(1 for kw in keywords if kw in content.lower())
-        if score > 0 or len(md_files) <= 3:  # 文件少时全量返回
+        if score > 0 or len(all_files) <= 3:
             preview = content[:500] + ("..." if len(content) > 500 else "")
-            results.append(f"### {fpath}\n{preview}")
+            results.append(f"### [本地] {fpath}\n{preview}")
 
-    return "\n\n".join(results) if results else "（未找到与主题匹配的素材）"
+    if not all_files:
+        results.append("（本地素材库为空）")
+
+    # 2. reference_urls：从 config 抓取参考文章
+    ref_urls = CONFIG.get("reference_urls") or []
+    for url in ref_urls:
+        print(f"[Materials] 抓取参考文章：{url}")
+        text = fetch_url_text(url)
+        if text:
+            preview = text[:800] + ("..." if len(text) > 800 else "")
+            results.append(f"### [URL] {url}\n{preview}")
+        else:
+            results.append(f"### [URL] {url}\n（抓取失败，跳过）")
+
+    raw = "\n\n".join(results) if results else "（未找到任何素材）"
+    return compact_materials(raw)
+
+
+def compact_materials(text: str, limit: int = 3000, target_ratio: float = 0.8) -> str:
+    """当原始素材超过 limit tokens 时，压缩到 limit * target_ratio。
+    策略：按块切分，优先保留高分块，每块截取到最大允许长度。"""
+    import math, re as _re
+
+    def _tokens(s: str) -> int:
+        cn = len(_re.findall(r'[\u4e00-\u9fff]', s))
+        return cn + math.ceil((len(s) - cn) / 4)
+
+    total = _tokens(text)
+    if total <= limit:
+        return text  # 不超过不处理
+
+    target = int(limit * target_ratio) - 40  # 2400，预留尾部注释行开销
+    blocks = [b.strip() for b in _re.split(r'\n(?=###)', text) if b.strip()]
+    if not blocks:
+        # 没有块结构，直接按字符截断
+        return text[:target * 3] + "\n\n…（素材过长已截断）"
+
+    # 每块平分 target tokens
+    per_block = max(200, target // len(blocks))
+    parts = []
+    used = 0
+    for block in blocks:
+        if used >= target:
+            break
+        remaining = target - used  # 剩余可用 token
+        bt = _tokens(block)
+        allowance = min(per_block, remaining)  # 不超过剩余馉额
+        if bt <= allowance:
+            parts.append(block)
+            used += bt
+        else:
+            # 截取到 allowance tokens 对应的字符数
+            # 粗略估算：先按字符数二分查找，确保实际 tokens 不超过 allowance
+            lo, hi = 0, len(block)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if _tokens(block[:mid]) <= allowance:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            parts.append(block[:lo] + "…（已截断）")
+            used += _tokens(block[:lo])
+
+    compact = "\n\n".join(parts)
+    compact += f"\n\n（素材已压缩：原始 {total} tokens → 目标 {target} tokens，保留 {len(parts)}/{len(blocks)} 块）"
+    return compact
 
 
 
